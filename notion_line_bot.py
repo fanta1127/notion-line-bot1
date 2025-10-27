@@ -55,6 +55,8 @@ def get_tomorrow_events():
     }
     
     response = requests.post(url, json=payload, headers=headers)
+    print(f"Status Code: {response.status_code}")
+    print(f"Response: {response.text}")
     response.raise_for_status()
     
     results = response.json().get('results', [])
