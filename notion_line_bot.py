@@ -1,94 +1,153 @@
-"""
-LINEグループIDを取得するための簡易スクリプト（Webhook不要版）
-
-BOTが参加しているグループの一覧を取得します。
-
-使い方:
-1. 環境変数を設定:
-   export LINE_CHANNEL_ACCESS_TOKEN='your_token'
-2. python get_group_id_simple.py を実行
-"""
-
 import os
 import requests
+from datetime import datetime, timedelta
+import pytz
 
+# 環境変数から取得
+NOTION_TOKEN = os.environ.get('NOTION_TOKEN')
+NOTION_DATABASE_ID = os.environ.get('NOTION_DATABASE_ID')
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
+LINE_GROUP_ID = os.environ.get('LINE_GROUP_ID')
 
-if not LINE_CHANNEL_ACCESS_TOKEN:
-    print("エラー: LINE_CHANNEL_ACCESS_TOKENが設定されていません")
-    print("\n以下のコマンドを実行してください:")
-    print("export LINE_CHANNEL_ACCESS_TOKEN='your_token_here'")
-    exit(1)
+# 日本時間のタイムゾーン
+JST = pytz.timezone('Asia/Tokyo')
 
-def get_bot_info():
-    """BOTの情報を取得"""
-    url = "https://api.line.me/v2/bot/info"
+
+def get_tomorrow_events():
+    """Notionから翌日の予定を取得"""
     headers = {
+        "Authorization": f"Bearer {NOTION_TOKEN}",
+        "Content-Type": "application/json",
+        "Notion-Version": "2022-06-28"
+    }
+    
+    # 翌日の日付範囲を計算（日本時間）
+    now = datetime.now(JST)
+    tomorrow_start = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    tomorrow_end = tomorrow_start + timedelta(days=1)
+    
+    # Notion APIでデータベースをクエリ
+    url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
+    
+    payload = {
+        "filter": {
+            "and": [
+                {
+                    "property": "日付",
+                    "date": {
+                        "on_or_after": tomorrow_start.isoformat()
+                    }
+                },
+                {
+                    "property": "日付",
+                    "date": {
+                        "before": tomorrow_end.isoformat()
+                    }
+                }
+            ]
+        },
+        "sorts": [
+            {
+                "property": "日付",
+                "direction": "ascending"
+            }
+        ]
+    }
+    
+    response = requests.post(url, json=payload, headers=headers)
+    response.raise_for_status()
+    
+    results = response.json().get('results', [])
+    
+    events = []
+    for page in results:
+        # 名前を取得
+        name_property = page['properties'].get('名前', {})
+        if name_property.get('title'):
+            name = name_property['title'][0]['plain_text']
+        else:
+            name = "（タイトルなし）"
+        
+        # 日付を取得
+        date_property = page['properties'].get('日付', {})
+        if date_property.get('date'):
+            date_str = date_property['date']['start']
+            # ISO形式の日付をパース
+            event_date = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+            # 日本時間に変換
+            event_date_jst = event_date.astimezone(JST)
+            
+            events.append({
+                'name': name,
+                'datetime': event_date_jst
+            })
+    
+    return events
+
+
+def format_message(events):
+    """通知メッセージを整形"""
+    if not events:
+        return None
+    
+    tomorrow = (datetime.now(JST) + timedelta(days=1)).strftime('%m月%d日')
+    
+    message = f"📅 明日（{tomorrow}）の予定\n\n"
+    
+    for event in events:
+        time_str = event['datetime'].strftime('%H:%M')
+        message += f"🕐 {time_str} - {event['name']}\n"
+    
+    return message
+
+
+def send_line_message(message):
+    """LINEグループにメッセージを送信"""
+    if not message:
+        print("送信する予定がありません")
+        return
+    
+    url = "https://api.line.me/v2/bot/message/push"
+    headers = {
+        "Content-Type": "application/json",
         "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"
     }
     
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        info = response.json()
-        print(f"\nBOT名: {info.get('displayName', 'N/A')}")
-        print(f"BOT ID: {info.get('userId', 'N/A')}")
-        return True
-    else:
-        print(f"エラー: BOT情報の取得に失敗しました (Status: {response.status_code})")
-        print(f"レスポンス: {response.text}")
-        return False
+    payload = {
+        "to": LINE_GROUP_ID,
+        "messages": [
+            {
+                "type": "text",
+                "text": message
+            }
+        ]
+    }
+    
+    response = requests.post(url, json=payload, headers=headers)
+    response.raise_for_status()
+    
+    print("メッセージ送信成功！")
+
 
 def main():
-    print("="*60)
-    print("LINE グループID取得ツール")
-    print("="*60)
-    
-    # BOT情報の確認
-    if not get_bot_info():
-        return
-    
-    print("\n" + "="*60)
-    print("【重要】グループIDの取得方法")
-    print("="*60)
-    print("""
-残念ながら、LINE Messaging APIでは直接グループ一覧を
-取得する方法がありません。
-
-以下のいずれかの方法でグループIDを取得してください:
-
-【方法1】Webhookを使用する（推奨）
----------------------------------------
-1. LINE Developersコンソールを開く
-2. Webhook設定を有効化（一時的でOK）
-3. ngrokなどでローカルサーバーを公開:
-   - ngrok http 5000
-   - 表示されたURLをWebhook URLに設定
-4. get_group_id.py を実行
-5. グループでBOTに何かメッセージを送信
-6. コンソールにグループIDが表示される
-
-【方法2】LINE Official Account Managerから確認
----------------------------------------
-1. https://manager.line.biz/ にアクセス
-2. 該当のアカウントを選択
-3. 「メッセージ」→「応答メッセージ」などから
-   グループでテストメッセージを送信
-4. Webhookログでgroup_idを確認
-
-【方法3】テストメッセージを送信してエラーから取得
----------------------------------------
-適当なIDで送信を試みて、エラーメッセージから
-正しいIDのフォーマットを確認する方法です。
-（あまり推奨しません）
-"""
-    
-    print("\n" + "="*60)
-    print("次のステップ:")
-    print("="*60)
-    print("1. BOTをグループに追加")
-    print("2. 上記の方法でグループIDを取得")
-    print("3. GitHubのSecretsにLINE_GROUP_IDとして設定")
-    print("="*60 + "\n")
+    """メイン処理"""
+    try:
+        print("翌日の予定を取得中...")
+        events = get_tomorrow_events()
+        
+        print(f"{len(events)}件の予定が見つかりました")
+        
+        message = format_message(events)
+        
+        if message:
+            print("LINEに送信中...")
+            send_line_message(message)
+        else:
+            print("翌日の予定はありません")
+            
+    except Exception as e:
+        print(f"エラーが発生しました: {e}")
+        raise
 
 
 if __name__ == "__main__":
