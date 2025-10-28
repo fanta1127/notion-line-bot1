@@ -86,6 +86,10 @@ def get_future_events():
         date_property = page['properties'].get(NOTION_PROPERTY_DATE, {})
         if date_property.get('date'):
             date_str = date_property['date']['start']
+            
+            # 時刻が含まれているかチェック
+            has_time = 'T' in date_str or len(date_str) > 10
+            
             # ISO形式の日付をパース
             event_date = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
             # 指定タイムゾーンに変換
@@ -93,7 +97,8 @@ def get_future_events():
             
             events.append({
                 'name': name,
-                'datetime': event_date_local
+                'datetime': event_date_local,
+                'has_time': has_time
             })
     
     return events
@@ -111,8 +116,13 @@ def format_message(events):
     message = MESSAGE_TEMPLATE.format(date=target_date)
     
     for event in events:
-        time_str = event['datetime'].strftime(TIME_FORMAT)
-        message += EVENT_FORMAT.format(time=time_str, name=event['name'])
+        if event['has_time']:
+            # 時刻が設定されている場合
+            time_str = event['datetime'].strftime(TIME_FORMAT)
+            message += EVENT_FORMAT.format(time=time_str, name=event['name'])
+        else:
+            # 時刻が設定されていない場合（終日イベント）
+            message += f"📌 {event['name']}\n"
     
     return message
 
