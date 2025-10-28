@@ -2,6 +2,18 @@ import os
 import requests
 from datetime import datetime, timedelta
 import pytz
+from config import (
+    NOTION_PROPERTY_TITLE,
+    NOTION_PROPERTY_DATE,
+    MESSAGE_TEMPLATE,
+    TIME_FORMAT,
+    DATE_FORMAT,
+    EVENT_FORMAT,
+    TIMEZONE,
+    DAYS_AHEAD,
+    SEND_EMPTY_MESSAGE,
+    EMPTY_MESSAGE
+)
 
 # 環境変数から取得
 NOTION_TOKEN = os.environ.get('NOTION_TOKEN')
@@ -9,22 +21,22 @@ NOTION_DATABASE_ID = os.environ.get('NOTION_DATABASE_ID')
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
 LINE_GROUP_ID = os.environ.get('LINE_GROUP_ID')
 
-# 日本時間のタイムゾーン
-JST = pytz.timezone('Asia/Tokyo')
+# タイムゾーン設定
+JST = pytz.timezone(TIMEZONE)
 
 
-def get_tomorrow_events():
-    """Notionから翌日の予定を取得"""
+def get_future_events():
+    """Notionから指定日数後の予定を取得"""
     headers = {
         "Authorization": f"Bearer {NOTION_TOKEN}",
         "Content-Type": "application/json",
         "Notion-Version": "2022-06-28"
     }
     
-    # 翌日の日付範囲を計算（日本時間）
+    # 指定日数後の日付範囲を計算
     now = datetime.now(JST)
-    tomorrow_start = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    tomorrow_end = tomorrow_start + timedelta(days=1)
+    target_start = (now + timedelta(days=DAYS_AHEAD)).replace(hour=0, minute=0, second=0, microsecond=0)
+    target_end = target_start + timedelta(days=1)
     
     # Notion APIでデータベースをクエリ
     url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
@@ -33,22 +45,22 @@ def get_tomorrow_events():
         "filter": {
             "and": [
                 {
-                    "property": "日付",
+                    "property": NOTION_PROPERTY_DATE,
                     "date": {
-                        "on_or_after": tomorrow_start.isoformat()
+                        "on_or_after": target_start.isoformat()
                     }
                 },
                 {
-                    "property": "日付",
+                    "property": NOTION_PROPERTY_DATE,
                     "date": {
-                        "before": tomorrow_end.isoformat()
+                        "before": target_end.isoformat()
                     }
                 }
             ]
         },
         "sorts": [
             {
-                "property": "日付",
+                "property": NOTION_PROPERTY_DATE,
                 "direction": "ascending"
             }
         ]
@@ -63,25 +75,25 @@ def get_tomorrow_events():
     
     events = []
     for page in results:
-        # 名前を取得
-        name_property = page['properties'].get('名前', {})
+        # タイトルを取得
+        name_property = page['properties'].get(NOTION_PROPERTY_TITLE, {})
         if name_property.get('title'):
             name = name_property['title'][0]['plain_text']
         else:
             name = "（タイトルなし）"
         
         # 日付を取得
-        date_property = page['properties'].get('日付', {})
+        date_property = page['properties'].get(NOTION_PROPERTY_DATE, {})
         if date_property.get('date'):
             date_str = date_property['date']['start']
             # ISO形式の日付をパース
             event_date = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-            # 日本時間に変換
-            event_date_jst = event_date.astimezone(JST)
+            # 指定タイムゾーンに変換
+            event_date_local = event_date.astimezone(JST)
             
             events.append({
                 'name': name,
-                'datetime': event_date_jst
+                'datetime': event_date_local
             })
     
     return events
@@ -90,15 +102,17 @@ def get_tomorrow_events():
 def format_message(events):
     """通知メッセージを整形"""
     if not events:
+        if SEND_EMPTY_MESSAGE:
+            return EMPTY_MESSAGE
         return None
     
-    tomorrow = (datetime.now(JST) + timedelta(days=1)).strftime('%m月%d日')
+    target_date = (datetime.now(JST) + timedelta(days=DAYS_AHEAD)).strftime(DATE_FORMAT)
     
-    message = f"📅 明日（{tomorrow}）の予定\n\n"
+    message = MESSAGE_TEMPLATE.format(date=target_date)
     
     for event in events:
-        time_str = event['datetime'].strftime('%H:%M')
-        message += f"🕐 {time_str} - {event['name']}\n"
+        time_str = event['datetime'].strftime(TIME_FORMAT)
+        message += EVENT_FORMAT.format(time=time_str, name=event['name'])
     
     return message
 
@@ -134,8 +148,9 @@ def send_line_message(message):
 def main():
     """メイン処理"""
     try:
-        print("翌日の予定を取得中...")
-        events = get_tomorrow_events()
+        days_text = "明日" if DAYS_AHEAD == 1 else f"{DAYS_AHEAD}日後"
+        print(f"{days_text}の予定を取得中...")
+        events = get_future_events()
         
         print(f"{len(events)}件の予定が見つかりました")
         
@@ -145,7 +160,7 @@ def main():
             print("LINEに送信中...")
             send_line_message(message)
         else:
-            print("翌日の予定はありません")
+            print(f"{days_text}の予定はありません")
             
     except Exception as e:
         print(f"エラーが発生しました: {e}")
