@@ -2,8 +2,8 @@ name: Daily Notion to LINE Notification
 
 on:
   schedule:
-    # 毎日21:00 JST (12:00 UTC) に実行
-    - cron: '0 12 * * *'
+    # 毎日20:30 JST (11:30 UTC) に実行---遅延の可能性あり
+    - cron: '30 11 * * *'
   workflow_dispatch:  # 手動実行も可能
 
 jobs:
